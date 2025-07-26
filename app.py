@@ -8,21 +8,23 @@ from llama_index.embeddings.gemini import GeminiEmbedding
 from utils.loader import load_all_documents
 import fitz  # PyMuPDF
 import json
+import time
+import streamlit.components.v1 as components
 
-# Load API key
+# Load API Key
 load_dotenv()
 api_key = os.getenv("GOOGLE_API_KEY")
 
-# Configure LLM & Embeddings
+# Configure Gemini LLM and Embeddings
 llm = Gemini(api_key=api_key, model="models/gemini-1.5-flash")
 embed_model = GeminiEmbedding(api_key=api_key)
 Settings.llm = llm
 Settings.embed_model = embed_model
 
-# Set Streamlit Page
-st.set_page_config(page_title="📚 Gemini RAG Chatbot", layout="wide")
+# Streamlit Page Config
+st.set_page_config(page_title="📚 DocBot", layout="wide")
 
-# --- Session states ---
+# Session State Initialization
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
@@ -32,7 +34,7 @@ if "query_engine" not in st.session_state:
 if "uploaded_filenames" not in st.session_state:
     st.session_state.uploaded_filenames = []
 
-# --- Sidebar ---
+# Sidebar - Upload Documents
 with st.sidebar:
     st.header("📁 Upload Documents")
     files = st.file_uploader("Upload PDF, DOCX, TXT", type=["pdf", "docx", "txt"], accept_multiple_files=True)
@@ -65,11 +67,87 @@ with st.sidebar:
         st.session_state.uploaded_filenames = []
         st.rerun()
 
-# --- Tabs ---
-tabs = st.tabs(["📄 Docs Preview","💬 Chat",  "⚙️ Settings"])
+# Tabs UI (Chat is default)
+tabs = st.tabs(["💬 Chat", "📄 Docs Preview", "⚙️ Settings"])
+
+# --- Chat Tab ---
+with tabs[0]:
+    st.markdown("<h2 style='color:green;'>💬 Ask Questions</h2>", unsafe_allow_html=True)
+
+    chat_container = st.container()
+    scroll_code = """
+    <script>
+    var chatDiv = window.parent.document.querySelector('section.main');
+    if (chatDiv) {
+        chatDiv.scrollTop = chatDiv.scrollHeight;
+    }
+    </script>
+    """
+
+    if st.session_state.query_engine:
+        prompt = st.chat_input("Ask something about your documents...")
+        if prompt:
+            user_time = datetime.now().strftime("%H:%M:%S")
+            st.session_state.chat_history.append({
+                "role": "user",
+                "content": prompt,
+                "time": user_time
+            })
+
+            with st.spinner("🤖 DocBot is thinking..."):
+                time.sleep(0.5)
+                response = st.session_state.query_engine.query(prompt)
+
+            DocBot_time = datetime.now().strftime("%H:%M:%S")
+            st.session_state.chat_history.append({
+                "role": "DocBot",
+                "content": response.response,
+                "time": DocBot_time
+            })
+
+            components.html(scroll_code, height=0)
+    else:
+        st.warning("⚠️ Please upload documents and click '🔁 Rebuild Index' in the sidebar to enable asking questions.")
+
+    with chat_container:
+        theme = st.get_option("theme.base")
+        user_bg = "#dcf8c6" if theme == "light" else "#2e3b3c"
+        bot_bg = "#f1f0f0" if theme == "light" else "#383232"
+        text_color = "#000000" if theme == "light" else "#ffffff"
+
+        for msg in st.session_state.chat_history:
+            is_user = msg["role"] == "user"
+            avatar_emoji = "🧑" if is_user else "🤖"
+            bg_color = user_bg if is_user else bot_bg
+            align = "flex-end" if is_user else "flex-start"
+
+            st.markdown(f"""
+            <div style='
+                display: flex;
+                justify-content: {align};
+                margin-bottom: 1rem;
+                align-items: flex-start;
+            '>
+              <div style='
+                  background-color: {bg_color};
+                  padding: 1rem;
+                  border-radius: 1rem;
+                  max-width: 85%;
+                  color: {text_color};
+                  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                  white-space: pre-wrap;
+                  overflow-wrap: break-word;
+              '>
+                <b>{avatar_emoji} {msg["role"].capitalize()} [{msg["time"]}]</b><br>
+                {msg["content"]}
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        components.html(scroll_code, height=0)
 
 # --- Docs Preview Tab ---
-with tabs[0]:
+with tabs[1]:
     st.subheader("📄 Document Preview")
     for filename in st.session_state.uploaded_filenames:
         if filename.endswith(".pdf"):
@@ -80,57 +158,12 @@ with tabs[0]:
                 text = page.get_text().strip()
                 if text:
                     st.markdown(f"<b>Page {page_num}</b>", unsafe_allow_html=True)
-                    st.code(text[:1000])  # Preview first 1000 chars
+                    st.code(text[:1000])  # Preview first 1000 characters
                 if page_num >= 3:
                     st.info("Preview limited to 3 pages.")
                     break
         else:
             st.markdown(f"📄 *{filename} (preview not supported yet)*")
-
-# --- Chat Tab ---
-with tabs[1]:
-    st.subheader("💬 Ask Questions")
-    if st.session_state.query_engine:
-        prompt = st.chat_input("Ask something about your documents...")
-        if prompt:
-            with st.spinner("Gemini is thinking..."):
-                response = st.session_state.query_engine.query(prompt)
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                st.session_state.chat_history.append({
-                    "role": "user",
-                    "content": prompt,
-                    "time": timestamp
-                })
-                st.session_state.chat_history.append({
-                    "role": "gemini",
-                    "content": response.response,
-                    "time": timestamp
-                })
-
-    # Display chat
-theme = st.get_option("theme.base")
-user_color = "#f0f0f0" if theme == "light" else "#394648"
-bot_color = "#e2e8f0" if theme == "light" else "#453c2f"
-text_color = "#000000" if theme == "light" else "#ffffff"
-
-for msg in st.session_state.chat_history:
-    avatar = "🧑" if msg["role"] == "user" else "🤖"
-    bg_color = user_color if msg["role"] == "user" else bot_color
-
-    st.markdown(f"""
-    <div style='
-        background-color: {bg_color};
-        padding: 10px;
-        border-radius: 10px;
-        margin-bottom: 10px;
-        color: {text_color};
-    '>
-    <b>{avatar} {msg['role'].capitalize()} [{msg['time']}]:</b><br>{msg["content"]}
-    </div>
-    """, unsafe_allow_html=True)
-
-    if not st.session_state.query_engine:
-        st.info("⚠️ Please upload files and click 'Rebuild Index' in the sidebar.")
 
 # --- Settings Tab ---
 with tabs[2]:
